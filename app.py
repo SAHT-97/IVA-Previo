@@ -5,6 +5,7 @@ y genera un detalle de impuestos con el formato del cliente.
 """
 
 import io
+import datetime
 import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
@@ -63,80 +64,58 @@ def num(v):
         return 0
 
 
-def buscar_fila(df, claves):
-    """Busca en la primera columna una fila cuyo texto contenga alguna de las claves."""
-    if df is None or df.empty:
-        return None
-    col = df.iloc[:, 0].astype(str).str.lower()
-    for clave in claves:
-        mask = col.str.contains(clave.lower(), na=False, regex=False)
-        if mask.any():
-            return df[mask].iloc[0]
-    return None
-
-
 def extraer_ventas(df):
-    """Extrae los montos de ventas desde el CSV del SII."""
+    """Extrae los montos de ventas desde el libro detallado del SII."""
     resultado = {
         "facturas_neto": 0, "facturas_iva": 0,
         "boletas_neto": 0, "boletas_iva": 0,
         "nc_neto": 0, "nc_iva": 0,
         "cpe_neto": 0, "cpe_iva": 0,
     }
-    if df is None:
+    if df is None or df.empty:
         return resultado
 
-    f = buscar_fila(df, ["Factura Electrónica(33)", "Factura Electronica(33)", "factura electr"])
-    if f is not None:
-        resultado["facturas_neto"] = num(f.get("Monto Neto", 0))
-        resultado["facturas_iva"] = num(f.get("Monto IVA", 0))
+    df = df.copy()
+    df.columns = [c.strip() for c in df.columns]
+    tipo = pd.to_numeric(df.get("Tipo Doc", pd.Series(dtype=float)), errors="coerce")
 
-    b = buscar_fila(df, ["Boleta Electr", "boleta(39)", "boleta electr"])
-    if b is not None:
-        resultado["boletas_neto"] = num(b.get("Monto Neto", 0))
-        resultado["boletas_iva"] = num(b.get("Monto IVA", 0))
+    def suma(mask, col):
+        if col not in df.columns:
+            return 0
+        return int(df.loc[mask, col].apply(num).sum())
 
-    nc = buscar_fila(df, ["Nota de Crédito", "Nota de Credito", "nota de cr"])
-    if nc is not None:
-        resultado["nc_neto"] = num(nc.get("Monto Neto", 0))
-        resultado["nc_iva"] = num(nc.get("Monto IVA", 0))
-
-    cpe = buscar_fila(df, ["Comprobantes Pago Electrónico", "Comprobante Pago Electronico",
-                            "comprobante pago", "Pago Electr"])
-    if cpe is not None:
-        resultado["cpe_neto"] = num(cpe.get("Monto Neto", 0))
-        resultado["cpe_iva"] = num(cpe.get("Monto IVA", 0))
+    resultado["facturas_neto"] = suma(tipo == 33, "Monto Neto")
+    resultado["facturas_iva"]  = suma(tipo == 33, "Monto IVA")
+    resultado["boletas_neto"]  = suma(tipo.isin([39, 41]), "Monto Neto")
+    resultado["boletas_iva"]   = suma(tipo.isin([39, 41]), "Monto IVA")
+    resultado["nc_neto"]       = suma(tipo == 61, "Monto Neto")
+    resultado["nc_iva"]        = suma(tipo == 61, "Monto IVA")
 
     return resultado
 
 
 def extraer_compras(df):
-    """Extrae los montos de compras desde el CSV del SII."""
+    """Extrae los montos de compras desde el libro detallado del SII."""
     resultado = {
         "facturas_neto": 0, "facturas_iva": 0,
         "nc_neto": 0, "nc_iva": 0,
     }
-    if df is None:
+    if df is None or df.empty:
         return resultado
 
-    # IVA en compras puede venir en distintas columnas: IVA Recuperable, Monto IVA, etc.
-    def iva_de(fila):
-        for c in ("IVA Recuperable", "Monto IVA", "IVA Uso Comun", "IVA Uso Común"):
-            if c in fila.index:
-                v = num(fila.get(c, 0))
-                if v:
-                    return v
-        return 0
+    df = df.copy()
+    df.columns = [c.strip() for c in df.columns]
+    tipo = pd.to_numeric(df.get("Tipo Doc", pd.Series(dtype=float)), errors="coerce")
 
-    f = buscar_fila(df, ["Factura Electrónica(33)", "Factura Electronica(33)", "factura electr"])
-    if f is not None:
-        resultado["facturas_neto"] = num(f.get("Monto Neto", 0))
-        resultado["facturas_iva"] = iva_de(f)
+    def suma(mask, col):
+        if col not in df.columns:
+            return 0
+        return int(df.loc[mask, col].apply(num).sum())
 
-    nc = buscar_fila(df, ["Nota de Crédito", "Nota de Credito", "nota de cr"])
-    if nc is not None:
-        resultado["nc_neto"] = num(nc.get("Monto Neto", 0))
-        resultado["nc_iva"] = iva_de(nc)
+    resultado["facturas_neto"] = suma(tipo == 33, "Monto Neto")
+    resultado["facturas_iva"]  = suma(tipo == 33, "Monto IVA Recuperable")
+    resultado["nc_neto"]       = suma(tipo == 61, "Monto Neto")
+    resultado["nc_iva"]        = suma(tipo == 61, "Monto IVA Recuperable")
 
     return resultado
 
@@ -176,8 +155,11 @@ def render_informe(nombre, v, c, ppm_pct, retencion, remanente_anterior):
                 DETALLE DE IMPUESTO
             </span>
         </div>
-        <div style="text-align:center; font-size:16px; font-weight:bold; margin-bottom:14px;">
+        <div style="text-align:center; font-size:16px; font-weight:bold; margin-bottom:4px;">
             {nombre}
+        </div>
+        <div style="text-align:center; font-size:13px; margin-bottom:14px; color:#444;">
+            {datetime.date.today().strftime("%d/%m/%Y")}
         </div>
 
         <table style="width:100%; border-collapse: collapse;">
@@ -323,7 +305,7 @@ def render_informe(nombre, v, c, ppm_pct, retencion, remanente_anterior):
 
 # ------------------------- UI -------------------------
 st.title("🧾 Cálculo de IVA / Impuesto a Pagar")
-st.caption("Sube los resúmenes del SII y obtén el detalle listo para enviar al cliente.")
+st.caption("Sube los libros detallados del SII y obtén el detalle listo para enviar al cliente.")
 
 with st.sidebar:
     st.header("⚙️ Parámetros")
@@ -341,10 +323,10 @@ with st.sidebar:
 
 col1, col2 = st.columns(2)
 with col1:
-    archivo_ventas = st.file_uploader("📤 Resumen de **Ventas** (CSV del SII)",
+    archivo_ventas = st.file_uploader("📤 Libro de **Ventas** (CSV del SII)",
                                       type=["csv"], key="ventas")
 with col2:
-    archivo_compras = st.file_uploader("📥 Resumen de **Compras** (CSV del SII)",
+    archivo_compras = st.file_uploader("📥 Libro de **Compras** (CSV del SII)",
                                        type=["csv"], key="compras")
 
 if archivo_ventas and archivo_compras:
@@ -380,8 +362,8 @@ if archivo_ventas and archivo_compras:
 else:
     st.warning("⬆️ Sube ambos archivos (ventas y compras) para generar el detalle.")
     st.markdown("""
-    **Formato esperado del CSV del SII:**
+    **Formato esperado del CSV del SII (libro detallado):**
     - Separador: `;`
-    - Columnas de ventas: `Tipo Documento; Total Documentos; Monto Exento; Monto Neto; Monto IVA; Monto Total`
-    - Columnas de compras: `Tipo Documento; Total Documentos; Monto Exento; Monto Neto; IVA Recuperable; ...`
+    - **Ventas:** columnas `Nro; Tipo Doc; Monto Neto; Monto IVA; ...` (Tipo Doc: 33=Factura, 39/41=Boleta, 61=NC)
+    - **Compras:** columnas `Nro; Tipo Doc; Monto Neto; Monto IVA Recuperable; ...` (Tipo Doc: 33=Factura, 61=NC)
     """)
